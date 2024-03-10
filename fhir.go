@@ -4,11 +4,13 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"regexp"
 
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs"
@@ -35,9 +37,33 @@ func (f *FHIR) SampleConfig() string {
 }
 
 func (f *FHIR) Init() error {
-	if f.ServerURL == "" {
-		return fmt.Errorf("server URL cannot be empty")
+	if len(f.ServerURLs) == 0 {
+		return fmt.Errorf("server URLs cannot be empty")
 	}
+
+	hostnameRegex := regexp.MustCompile(`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,6}$|^localhost$`)
+	fqdnRegex := regexp.MustCompile(`^(?:[a-zA-Z0-9_-]+\.)*[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z]{2,11}?$`)
+	pathRegex := regexp.MustCompile(`^/(?:[a-zA-Z0-9_-]+/?)*$`)
+
+	for _, serverURL := range f.ServerURLs {
+		parsedURL, err := url.Parse(serverURL)
+		if err != nil {
+			return fmt.Errorf("invalid server URL: %s", serverURL)
+		}
+
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			return fmt.Errorf("invalid URL scheme in %s, must be http or https", serverURL)
+		}
+
+		if !hostnameRegex.MatchString(parsedURL.Hostname()) && !fqdnRegex.MatchString(parsedURL.Hostname()) {
+			return fmt.Errorf("invalid hostname or FQDN in URL: %s", serverURL)
+		}
+
+		if parsedURL.Path != "" && !pathRegex.MatchString(parsedURL.Path) {
+			return fmt.Errorf("invalid path in URL: %s", serverURL)
+		}
+	}
+
 	// Additional validation can be added here
 	return nil
 }
@@ -62,16 +88,16 @@ func (f *FHIR) Gather(acc telegraf.Accumulator) error {
 	return nil
 }
 
-func (f *FHIR) getResourceTypes() ([]string, error) {
+func (f *FHIR) getResourceTypes(serverURL string) ([]string, error) {
 	var resourceTypes []string
 
 	// Construct the URL for the capability statement
-	url := f.ServerURL + "/metadata"
+	requestUrl := serverURL + "/metadata"
 
 	// Make the HTTP GET request
-	response, err := f.makeRequest(url)
+	response, err := f.makeRequest(requestUrl)
 	if err != nil {
-		return nil, fmt.Errorf("error making request to %s: %v", url, err)
+		return nil, fmt.Errorf("error making request to %s: %v", requestUrl, err)
 	}
 	defer func() {
 		if cerr := response.Body.Close(); cerr != nil {
@@ -106,11 +132,11 @@ func (f *FHIR) getResourceTypes() ([]string, error) {
 	return resourceTypes, nil
 }
 
-func (f *FHIR) getResourceCount(resourceType string) (int, error) {
-	url := fmt.Sprintf("%s/%s?_summary=count", f.ServerURL, resourceType)
-	response, err := f.makeRequest(url)
+func (f *FHIR) getResourceCount(serverURL string, resourceType string) (int, error) {
+	requestUrl := fmt.Sprintf("%s/%s?_summary=count", serverURL, resourceType)
+	response, err := f.makeRequest(requestUrl)
 	if err != nil {
-		return 0, fmt.Errorf("error making request to FHIR server: %w", err)
+		return 0, fmt.Errorf("error making request to %s: %v", requestUrl, err)
 	}
 	defer func() {
 		if cerr := response.Body.Close(); cerr != nil {
