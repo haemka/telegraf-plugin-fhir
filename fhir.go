@@ -20,7 +20,7 @@ import (
 var sampleConfig string
 
 type FHIR struct {
-	ServerURLs         []string        `toml:"server_url"`
+	ServerURLs         []string        `toml:"server_urls"`
 	Username           string          `toml:"username"`
 	Password           string          `toml:"password"`
 	SSLCert            string          `toml:"ssl_cert"`
